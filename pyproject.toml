@@ -1,0 +1,35 @@
+[project]
+name = "stemflow"
+version = "0.1.0"
+description = "AI-powered audio deconstruction and reconstruction pipeline"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "AGPL-3.0-or-later"}
+dependencies = [
+    "numpy",
+    "soundfile",
+    "librosa",
+    "pedalboard",
+    "pyloudnorm",
+]
+
+[project.optional-dependencies]
+full = [
+    "demucs",
+    "pyrubberband",
+    "essentia",
+    "beat-this @ git+https://github.com/CPJKU/beat_this.git",
+    "audio-separator",
+    "onnxruntime",
+    "pyyaml",
+]
+
+[project.scripts]
+stemflow = "stemflow.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.setuptools.packages.find]
+include = ["stemflow*"]

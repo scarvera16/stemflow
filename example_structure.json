@@ -1,0 +1,54 @@
+{
+  "total_seconds": 60,
+  "crossfade_ms": 1500,
+  "entries": [
+    {
+      "label": "intro_guitar",
+      "track": "track_a",
+      "stem": "guitar",
+      "start_ms": 0,
+      "end_ms": 16000,
+      "vol_db": -2
+    },
+    {
+      "label": "intro_bass",
+      "track": "track_a",
+      "stem": "bass",
+      "start_ms": 0,
+      "end_ms": 16000,
+      "vol_db": -4
+    },
+    {
+      "label": "main_drums",
+      "track": "track_b",
+      "stem": "drums",
+      "start_ms": 14000,
+      "end_ms": 45000,
+      "vol_db": 0
+    },
+    {
+      "label": "main_guitar",
+      "track": "track_b",
+      "stem": "guitar",
+      "start_ms": 16000,
+      "end_ms": 40000,
+      "vol_db": -1
+    },
+    {
+      "label": "peak_synth",
+      "track": "track_c",
+      "stem": "other",
+      "start_ms": 30000,
+      "end_ms": 45000,
+      "vol_db": -3
+    },
+    {
+      "label": "outro_vocals",
+      "track": "track_a",
+      "stem": "vocals",
+      "start_ms": 45000,
+      "end_ms": 60000,
+      "vol_db": -2
+    }
+  ]
+}

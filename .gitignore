@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Audio / media (never commit copyrighted or large audio files)
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.aiff
+*.ogg
+*.aac
+*.mov
+*.mp4
+*.avi
+
+# Pipeline working directories
+pipeline_output/
+source_tracks/
+output/
+
+# AI model caches
+*.ckpt
+*.onnx
+*.pt
+*.pth
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+*.env
+
+# Claude Code memory (personal, not for repo)
+.claude/
