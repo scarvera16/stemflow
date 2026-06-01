@@ -11,6 +11,9 @@ Modules:
                    mashability scoring
     process      — Per-stem cleanup (Pedalboard), time-stretch with
                    optional pitch shift (Rubber Band)
+    phrase       — Phrase alignment: bar-period detection, cross-
+                   correlation phase finding, beat-aligned trim and
+                   stretch primitive
     mix          — Float32 numpy stereo mixer with equal-power crossfades
     master       — Two-stage mastering (Pedalboard DSP + pyloudnorm LUFS)
     mashability  — AutoMashUpper-style pairwise compatibility scoring
@@ -49,6 +52,11 @@ from stemflow.mashability import (
 )
 from stemflow.master import master
 from stemflow.mix import build_mix, equal_power_fade
+from stemflow.phrase import (
+    bar_period_from_onsets,
+    beat_aligned_stretch,
+    find_phrase_downbeat,
+)
 from stemflow.process import clean_stem, stretch_to_bpm
 from stemflow.separate import separate_stems
 
@@ -81,4 +89,7 @@ __all__ = [
     "all_tracks",
     "query",
     "find_mashups",
+    "bar_period_from_onsets",
+    "find_phrase_downbeat",
+    "beat_aligned_stretch",
 ]
