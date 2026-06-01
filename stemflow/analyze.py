@@ -62,7 +62,10 @@ def detect_bpm(audio_file: Path, device: str = "mps") -> BeatAnalysis:
     y, sr = librosa.load(str(audio_file), mono=True)
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
     beats = librosa.frames_to_time(beat_frames, sr=sr)
-    bpm = float(tempo)
+    # librosa 0.10+ returns tempo as a 1-d array (shape (1,)) rather
+    # than a scalar; older versions returned a Python float. Coerce
+    # via atleast_1d().item() so both shapes work.
+    bpm = float(np.atleast_1d(tempo).item(0))
     log.info("  librosa: %.1f BPM, %d beats (no downbeat detection)", bpm, len(beats))
     return BeatAnalysis(bpm=bpm, beats=beats)
 
