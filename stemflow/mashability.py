@@ -114,9 +114,15 @@ def rhythmic_score(bpm_a: float, bpm_b: float) -> float:
     """Score how close two tempos are after up-to-octave matching.
 
     The faster BPM is halved while it remains more than 1.5x the
-    slower; the result is the ratio of the (matched) slower to faster.
-    A perfect match returns 1.0. Returns 0.0 if either BPM is
-    non-positive.
+    slower AND halving would not push it below the slower. The result
+    is the ratio of (matched) slower to faster. A perfect match
+    returns 1.0. Returns 0.0 if either BPM is non-positive.
+
+    The second clause matters when the BPMs are far apart. For example
+    60 vs 200: halving 200 to 100 leaves a 1.67x ratio, but halving
+    again to 50 would put it below 60, so the function stops at 100
+    and returns 60/100 = 0.6 (rather than over-halving to 50 and
+    returning a misleadingly high 0.83).
 
     Args:
         bpm_a, bpm_b: BPMs of the two segments.
@@ -127,11 +133,10 @@ def rhythmic_score(bpm_a: float, bpm_b: float) -> float:
     if bpm_a <= 0 or bpm_b <= 0:
         return 0.0
     lo, hi = sorted([float(bpm_a), float(bpm_b)])
-    # Halve the faster tempo while it remains more than 1.5x the slower.
-    while hi / lo > 1.5:
+    # Halve the faster tempo while the ratio is wide AND halving would
+    # not put it below the slower.
+    while hi / lo > 1.5 and hi / 2 >= lo:
         hi = hi / 2
-        if hi < lo:
-            lo, hi = hi, lo
     return float(lo / hi)
 
 

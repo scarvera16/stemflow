@@ -23,6 +23,9 @@ full = [
     "onnxruntime",
     "pyyaml",
 ]
+dev = [
+    "pytest>=7.0",
+]
 
 [project.scripts]
 stemflow = "stemflow.cli:main"
@@ -33,3 +36,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["stemflow*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
