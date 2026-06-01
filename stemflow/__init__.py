@@ -9,14 +9,16 @@ Modules:
     analyze      — BPM/beat/downbeat detection (beat-this!), key
                    estimation (Essentia), feature extraction for
                    mashability scoring
-    process      — Per-stem cleanup (Pedalboard), time-stretching
-                   (Rubber Band)
+    process      — Per-stem cleanup (Pedalboard), time-stretch with
+                   optional pitch shift (Rubber Band)
     mix          — Float32 numpy stereo mixer with equal-power crossfades
     master       — Two-stage mastering (Pedalboard DSP + pyloudnorm LUFS)
     mashability  — AutoMashUpper-style pairwise compatibility scoring
                    (Davies et al. 2014)
+    corpus       — SQLite-backed track index for listener-scoped
+                   storage and corpus-wide candidate generation
     config       — Constants, feature flags, structure file loading
-    cli          — Command-line interface
+    cli          — Command-line interface (pipeline + score/index/query)
 """
 
 from stemflow.analyze import (
@@ -28,6 +30,16 @@ from stemflow.analyze import (
     detect_key,
 )
 from stemflow.config import load_structure
+from stemflow.corpus import (
+    all_tracks,
+    default_db_path,
+    find_mashups,
+    get_track,
+    index_directory,
+    index_track,
+    init_db,
+    query,
+)
 from stemflow.mashability import (
     MashabilityScore,
     harmonic_score,
@@ -61,4 +73,12 @@ __all__ = [
     "harmonic_score",
     "rhythmic_score",
     "spectral_score",
+    "init_db",
+    "default_db_path",
+    "index_track",
+    "index_directory",
+    "get_track",
+    "all_tracks",
+    "query",
+    "find_mashups",
 ]
