@@ -115,3 +115,73 @@ def analyze_track(audio_file: Path, device: str = "mps") -> TrackAnalysis:
         downbeats=beat_result.downbeats,
         key=key,
     )
+
+
+def compute_features(audio_file: Path, sr: int = 22050) -> dict:
+    """
+    Extra acoustic features for mashability scoring.
+
+    Computes a chroma profile (12-dim, time-averaged), summary spectral
+    statistics, and a coarse five-band energy profile. These complement
+    the BPM/key from `analyze_track` and feed `mashability.score_pair`.
+
+    Args:
+        audio_file: Path to audio file.
+        sr: Sample rate for loading. Default 22050 (librosa-typical).
+
+    Returns:
+        Dict with keys:
+            chroma_mean (np.ndarray, shape (12,)):
+                Mean chroma over the segment. Indices 0..11 correspond
+                to C..B.
+            spectral_centroid_mean (float):
+                Mean spectral centroid in Hz.
+            spectral_bandwidth_mean (float):
+                Mean spectral bandwidth in Hz.
+            spectral_rolloff_mean (float):
+                Mean rolloff at 85% energy in Hz.
+            spectral_profile (np.ndarray, shape (5,)):
+                Normalized energy in five bands: sub (0-60 Hz), bass
+                (60-250), low-mid (250-2000), mid (2000-6000), high
+                (6000-Nyquist).
+    """
+    audio_file = Path(audio_file)
+    log.info("Features: %s", audio_file.name)
+
+    y, sr = librosa.load(str(audio_file), sr=sr, mono=True)
+
+    # Chroma profile (12-dim mean over time).
+    chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+    chroma_mean = chroma.mean(axis=1)
+
+    # Summary spectral statistics.
+    centroid = float(librosa.feature.spectral_centroid(y=y, sr=sr).mean())
+    bandwidth = float(librosa.feature.spectral_bandwidth(y=y, sr=sr).mean())
+    rolloff = float(librosa.feature.spectral_rolloff(y=y, sr=sr).mean())
+
+    # Coarse band-energy profile (5 bands).
+    stft_mag = np.abs(librosa.stft(y))
+    freqs = librosa.fft_frequencies(sr=sr)
+    bands = [(0, 60), (60, 250), (250, 2000), (2000, 6000), (6000, sr / 2)]
+    band_energies = np.zeros(len(bands), dtype=float)
+    for i, (lo, hi) in enumerate(bands):
+        mask = (freqs >= lo) & (freqs < hi)
+        if mask.any():
+            band_energies[i] = stft_mag[mask].mean()
+    total = band_energies.sum()
+    spectral_profile = band_energies / total if total > 0 else band_energies
+
+    log.info(
+        "  chroma peak=%s, centroid=%.0f Hz, profile=%s",
+        ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"][int(np.argmax(chroma_mean))],
+        centroid,
+        np.round(spectral_profile, 2).tolist(),
+    )
+
+    return {
+        "chroma_mean": chroma_mean,
+        "spectral_centroid_mean": centroid,
+        "spectral_bandwidth_mean": bandwidth,
+        "spectral_rolloff_mean": rolloff,
+        "spectral_profile": spectral_profile,
+    }
