@@ -56,6 +56,7 @@ class StructureEntry(TypedDict, total=False):
     start_ms: int
     end_ms: int
     vol_db: float
+    pitch_st: float  # optional key-align transposition in semitones (default 0)
 
 
 def load_structure(path: Path) -> dict:

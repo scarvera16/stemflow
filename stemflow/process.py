@@ -89,27 +89,40 @@ def stretch_to_bpm(
     target_bpm: float,
     output_dir: Path,
     track_name: str = "",
+    pitch_shift_in_semitones: float = 0.0,
 ) -> Path:
     """
-    Time-stretch without pitch shift.
+    Time-stretch with optional pitch shift (key alignment).
 
-    Engine priority: Pedalboard (Rubber Band, zero-copy) → pyrubberband → librosa.
+    Engine priority: Pedalboard (Rubber Band, zero-copy) → pyrubberband
+    → librosa. Pedalboard does the stretch and the shift in one pass.
+    pyrubberband and librosa chain a separate pitch_shift after the
+    time_stretch.
 
     Args:
         audio_file: Path to audio file.
         source_bpm: Detected BPM of the source.
         target_bpm: Target BPM to stretch to.
-        output_dir: Base output directory. Stretched files go to output_dir/stretched/.
+        output_dir: Base output directory. Stretched files go to
+            output_dir/stretched/.
         track_name: Optional prefix for output filename.
+        pitch_shift_in_semitones: Pitch transposition to apply after
+            stretching. Positive shifts up, negative shifts down. Zero
+            (default) preserves pitch, matching this function's
+            historical behavior.
 
     Returns:
-        Path to the stretched audio file.
+        Path to the stretched (and optionally pitched) audio file.
     """
     import librosa
 
     audio_file = Path(audio_file)
     ratio = target_bpm / source_bpm
-    log.info("Stretching %s: %.1f→%.1f BPM (×%.3f)", audio_file.name, source_bpm, target_bpm, ratio)
+    pitch = float(pitch_shift_in_semitones)
+    log.info(
+        "Stretching %s: %.1f→%.1f BPM (×%.3f), pitch %+.2f st",
+        audio_file.name, source_bpm, target_bpm, ratio, pitch,
+    )
 
     y, sr = sf.read(str(audio_file), dtype="float32")
     if y.ndim == 1:
@@ -119,23 +132,37 @@ def stretch_to_bpm(
         from pedalboard import time_stretch
         y_out = time_stretch(
             y.T, float(sr), stretch_factor=ratio,
+            pitch_shift_in_semitones=pitch,
             high_quality=True, transient_mode="crisp", preserve_formants=True,
         ).T
         engine = "Pedalboard"
     elif HAS_RUBBERBAND:
         import pyrubberband as pyrb
-        y_out = np.stack([pyrb.time_stretch(y[:, ch], sr, ratio) for ch in range(y.shape[1])], axis=-1)
+        y_stretched = np.stack(
+            [pyrb.time_stretch(y[:, ch], sr, ratio) for ch in range(y.shape[1])],
+            axis=-1,
+        )
+        if pitch != 0.0:
+            y_out = np.stack(
+                [pyrb.pitch_shift(y_stretched[:, ch], sr, pitch) for ch in range(y_stretched.shape[1])],
+                axis=-1,
+            )
+        else:
+            y_out = y_stretched
         engine = "pyrubberband"
     else:
         y_mono = np.mean(y, axis=1)
         y_s = librosa.effects.time_stretch(y_mono, rate=ratio)
+        if pitch != 0.0:
+            y_s = librosa.effects.pitch_shift(y_s, sr=sr, n_steps=pitch)
         y_out = np.stack([y_s, y_s], axis=-1)
         engine = "librosa (mono fallback)"
 
     prefix = f"{track_name}__" if track_name else ""
     out_dir = Path(output_dir) / "stretched"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{prefix}{audio_file.stem}__{target_bpm:.0f}bpm.wav"
+    pitch_tag = f"_p{pitch:+.0f}st" if pitch != 0.0 else ""
+    out_path = out_dir / f"{prefix}{audio_file.stem}__{target_bpm:.0f}bpm{pitch_tag}.wav"
     sf.write(str(out_path), y_out, sr, subtype="FLOAT")
 
     log.info("  [%s] → %s", engine, out_path.name)
