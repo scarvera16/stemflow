@@ -322,12 +322,16 @@ def compose_section_mashup(
 
     # Compute target_bpm from sources if not explicitly provided. We need the
     # source BPMs first, so run beat-this up front (we'd run it later anyway).
+    # Also unpacks downbeats so timestamp overrides can snap to phrase
+    # boundaries instead of just the nearest beat.
     from beat_this.inference import File2Beats
     f2b = File2Beats(device=device, dbn=False)
-    drum_beats, _ = f2b(str(drum_track))
-    riff_beats, _ = f2b(str(riff_track))
+    drum_beats, drum_downbeats = f2b(str(drum_track))
+    riff_beats, riff_downbeats = f2b(str(riff_track))
     drum_beats = np.asarray(drum_beats)
     riff_beats = np.asarray(riff_beats)
+    drum_downbeats = np.asarray(drum_downbeats)
+    riff_downbeats = np.asarray(riff_downbeats)
 
     drum_bpm = 60.0 / float(np.median(np.diff(drum_beats))) if len(drum_beats) > 1 else 120.0
     riff_bpm = 60.0 / float(np.median(np.diff(riff_beats))) if len(riff_beats) > 1 else 120.0
@@ -336,6 +340,23 @@ def compose_section_mashup(
         target_bpm = auto_target_bpm(drum_bpm, riff_bpm)
         log.info("auto target_bpm: drum %.1f + riff %.1f -> %.1f BPM",
                  drum_bpm, riff_bpm, target_bpm)
+
+    # Octave multiplier for the riff layer. When the riff source is much
+    # faster than the target tempo, naive stretching produces extreme
+    # slowdown that destroys recognizability (Master of Puppets at 214 BPM
+    # stretched to 89.3 = factor 0.42 = half speed). The fix is to take
+    # more source beats (octave_mult * riff_n_beats) and use a proportionally
+    # shorter effective beat period, so the audio plays close to native
+    # speed while still filling the same time slot in the mashup. The result
+    # is a half-time interpretation of the riff: it sounds at its natural
+    # tempo, but its bar grid is "twice as dense" as the drum side.
+    riff_octave = 1
+    while riff_bpm / riff_octave > target_bpm * 1.41:  # ~sqrt(2)
+        riff_octave *= 2
+    if riff_octave > 1:
+        log.info("riff octave multiplier: %d (riff %.1f BPM at target %.1f "
+                 "would stretch too far; using half-time interpretation)",
+                 riff_octave, riff_bpm, target_bpm)
 
     # Required section durations (the auto-composer must pick sections long
     # enough to actually supply the requested bars; otherwise it would silently
@@ -376,28 +397,57 @@ def compose_section_mashup(
 
     # 3: Beats already computed above (needed for auto_target_bpm).
 
-    # 4: First beat at or after the chosen start (section pick or override)
-    drum_start_time_used = (
+    # 4: Snap each start to the nearest downbeat (if one is within half a bar
+    # of the chosen start time), then find the corresponding beat index.
+    # Snapping to downbeats rather than just beats ensures phrase alignment:
+    # the riff enters on bar 1 of its phrase, not mid-phrase, which is what
+    # listeners actually hear as "locked in" vs "off."
+    def _snap(beats: np.ndarray, downbeats: np.ndarray, t: float, bpm: float) -> tuple[int, float, bool]:
+        """Return (beat_idx, snapped_time, snapped_to_downbeat)."""
+        half_bar = 60.0 / bpm * 2.0  # half of 4 beats
+        if len(downbeats) > 0:
+            db_idx = int(np.argmin(np.abs(downbeats - t)))
+            db_t = float(downbeats[db_idx])
+            if abs(db_t - t) <= half_bar:
+                # Snap to this downbeat; find the matching beat
+                return int(np.argmin(np.abs(beats - db_t))), db_t, True
+        # Fall back to nearest beat
+        return int(np.searchsorted(beats, t)), t, False
+
+    drum_start_time_requested = (
         float(drum_start_time) if drum_start_time is not None else float(drum_pick.start_s)
     )
-    riff_start_time_used = (
+    riff_start_time_requested = (
         float(riff_start_time) if riff_start_time is not None else float(riff_pick.start_s)
     )
-    drum_start_idx = int(np.searchsorted(drum_beats, drum_start_time_used))
-    riff_start_idx = int(np.searchsorted(riff_beats, riff_start_time_used))
+
+    drum_start_idx, drum_start_time_used, drum_snapped = _snap(
+        drum_beats, drum_downbeats, drum_start_time_requested, drum_bpm,
+    )
+    riff_start_idx, riff_start_time_used, riff_snapped = _snap(
+        riff_beats, riff_downbeats, riff_start_time_requested, riff_bpm,
+    )
+    if drum_snapped:
+        log.info("drum start snapped: %.3fs -> downbeat %.3fs (beat %d)",
+                 drum_start_time_requested, drum_start_time_used, drum_start_idx)
+    if riff_snapped:
+        log.info("riff start snapped: %.3fs -> downbeat %.3fs (beat %d)",
+                 riff_start_time_requested, riff_start_time_used, riff_start_idx)
 
     drum_n_beats = total_bars * 4
     riff_n_beats = riff_bars * 4
+    effective_riff_n_beats = riff_n_beats * riff_octave
+    effective_riff_beat_period = target_beat_period / riff_octave
 
     if drum_start_idx + drum_n_beats >= len(drum_beats):
         raise ValueError(
             f"drum section ends before {drum_n_beats} beats are available "
             f"(have {len(drum_beats) - drum_start_idx})"
         )
-    if riff_start_idx + riff_n_beats >= len(riff_beats):
+    if riff_start_idx + effective_riff_n_beats >= len(riff_beats):
         raise ValueError(
-            f"riff section ends before {riff_n_beats} beats are available "
-            f"(have {len(riff_beats) - riff_start_idx})"
+            f"riff section ends before {effective_riff_n_beats} beats are available "
+            f"(octave multiplier {riff_octave}; have {len(riff_beats) - riff_start_idx})"
         )
 
     # 5: Beat-aligned stretch.
@@ -416,14 +466,16 @@ def compose_section_mashup(
         riff_layers = []
         for p in riff_paths:
             clip, _ = beat_aligned_stretch(
-                p, riff_beats, riff_start_idx, riff_n_beats, target_beat_period,
+                p, riff_beats, riff_start_idx,
+                effective_riff_n_beats, effective_riff_beat_period,
             )
             riff_layers.append(clip)
         # Sum the stems element-wise (same shape since same beat range + sr)
         riff_clip = np.sum(riff_layers, axis=0).astype(np.float32)
     else:
         riff_clip, _ = beat_aligned_stretch(
-            riff_track, riff_beats, riff_start_idx, riff_n_beats, target_beat_period,
+            riff_track, riff_beats, riff_start_idx,
+            effective_riff_n_beats, effective_riff_beat_period,
         )
 
     # 6: LUFS balance so both layers reach the master at perceptually equal
