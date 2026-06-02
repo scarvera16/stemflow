@@ -46,6 +46,8 @@ def bar_period_from_onsets(
     sr: int,
     search_seconds: tuple[float, float] = (1.5, 4.0),
     n_beats_per_bar: int = 4,
+    expected_bpm: float | None = None,
+    expected_bpm_tolerance: float = 0.15,
 ) -> float:
     """Detect the bar period (in seconds) via onset-envelope autocorrelation.
 
@@ -54,12 +56,25 @@ def bar_period_from_onsets(
     expected range. For a 4/4 song at typical metal tempos (70-120 BPM)
     the bar period is 2.0-3.5 seconds.
 
+    When `expected_bpm` is provided, the search range is narrowed to a
+    tight window around the expected bar period — this prevents the
+    autocorrelation from picking up sub-bar periodicities (a riff with
+    chord stabs on beats 1 and 3 will have a strong 2-beat autocorrelation
+    peak that can outrank the 4-beat bar peak; the SBT riff is the
+    canonical case).
+
     Args:
         audio: 1-D mono or 2-D stereo float audio.
         sr: Sample rate.
         search_seconds: (min, max) range for the bar period in seconds.
             Default (1.5, 4.0) covers ~60-160 BPM at n_beats_per_bar=4.
+            Ignored if `expected_bpm` is provided.
         n_beats_per_bar: Time signature numerator. Default 4 for 4/4.
+        expected_bpm: If given, narrow the search to bar periods within
+            `expected_bpm_tolerance` of the implied target.
+        expected_bpm_tolerance: Fractional tolerance around the expected
+            BPM. Default 0.15 (±15%). Only used when `expected_bpm`
+            is given.
 
     Returns:
         Bar period in seconds.
@@ -70,6 +85,13 @@ def bar_period_from_onsets(
         mono = audio.mean(axis=1)
     else:
         mono = audio
+
+    if expected_bpm is not None:
+        expected_period = 60.0 / expected_bpm * n_beats_per_bar
+        search_seconds = (
+            expected_period * (1 - expected_bpm_tolerance),
+            expected_period * (1 + expected_bpm_tolerance),
+        )
 
     hop = 512
     env = librosa.onset.onset_strength(y=mono, sr=sr, hop_length=hop)
