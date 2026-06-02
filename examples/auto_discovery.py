@@ -50,10 +50,26 @@ class Track:
     drums: Path
     other: Path
     bass: Path
-    genre: str  # for incongruity scoring
+    vocals: Path
+    genre: str
+    artist: str
+    # Which stems carry the song's identity for the riff layer. Default is
+    # [other, bass] (guitar + bass, the metal-canonical riff). For songs
+    # where the iconic element is something else, override: Orion needs
+    # ["bass"] only (Cliff Burton's line is the identity), a hypothetical
+    # MMJ track needs ["vocals"], etc.
+    iconic_riff_stems: list[str] = None  # type: ignore[assignment]
+
+    def __post_init__(self):
+        if self.iconic_riff_stems is None:
+            self.iconic_riff_stems = ["other", "bass"]
 
     def stems_ready(self) -> bool:
-        return all(p.exists() for p in (self.drums, self.other, self.bass))
+        return all(p.exists() for p in (self.drums, self.other, self.bass, self.vocals))
+
+    def riff_stem_paths(self) -> list[Path]:
+        mapping = {"drums": self.drums, "other": self.other, "bass": self.bass, "vocals": self.vocals}
+        return [mapping[s] for s in self.iconic_riff_stems]
 
 
 def legacy(base: str, stem: str) -> Path:
@@ -69,7 +85,8 @@ TRACKS = [
         drums=STEMS_LEGACY / "levee/Led Zeppelin - 08. When the Levee Breaks (Remaster) (Rem_(Drums)_htdemucs_ft.wav",
         other=STEMS_LEGACY / "levee/Led Zeppelin - 08. When the Levee Breaks (Remaster) (Rem_(Other)_htdemucs_ft.wav",
         bass=STEMS_LEGACY / "levee/Led Zeppelin - 08. When the Levee Breaks (Remaster) (Rem_(Bass)_htdemucs_ft.wav",
-        genre="hard-rock-blues",
+        vocals=STEMS_LEGACY / "levee/Led Zeppelin - 08. When the Levee Breaks (Remaster) (Rem_(Vocals)_htdemucs_ft.wav",
+        genre="rock", artist="Led Zeppelin",
     ),
     Track(
         name="Sad But True",
@@ -77,55 +94,59 @@ TRACKS = [
         drums=STEMS_LEGACY / "sad_but_true/Metallica - 02. Sad But True_(Drums)_htdemucs_ft.wav",
         other=STEMS_LEGACY / "sad_but_true/Metallica - 02. Sad But True_(Other)_htdemucs_ft.wav",
         bass=STEMS_LEGACY / "sad_but_true/Metallica - 02. Sad But True_(Bass)_htdemucs_ft.wav",
-        genre="metal-groove",
+        vocals=STEMS_LEGACY / "sad_but_true/Metallica - 02. Sad But True_(Vocals)_htdemucs_ft.wav",
+        genre="metal", artist="Metallica",
     ),
     Track(
-        name="Master of Puppets",
-        source=CORPUS / "Metallica/Master of Puppets.mp3",
+        name="Master of Puppets", source=CORPUS / "Metallica/Master of Puppets.mp3",
         drums=STEMS_NEW / "Master of Puppets/drums.wav",
         other=STEMS_NEW / "Master of Puppets/other.wav",
         bass=STEMS_NEW / "Master of Puppets/bass.wav",
-        genre="metal-thrash",
+        vocals=STEMS_NEW / "Master of Puppets/vocals.wav",
+        genre="metal", artist="Metallica",
     ),
     Track(
-        name="Enter Sandman",
-        source=CORPUS / "Metallica/Enter Sandman.mp3",
+        name="Enter Sandman", source=CORPUS / "Metallica/Enter Sandman.mp3",
         drums=STEMS_NEW / "Enter Sandman/drums.wav",
         other=STEMS_NEW / "Enter Sandman/other.wav",
         bass=STEMS_NEW / "Enter Sandman/bass.wav",
-        genre="metal-arena",
+        vocals=STEMS_NEW / "Enter Sandman/vocals.wav",
+        genre="metal", artist="Metallica",
     ),
     Track(
-        name="Harder Better Faster Stronger",
-        source=CORPUS / "Daft Punk/Harder Better Faster Stronger.mp3",
+        name="Harder Better Faster Stronger", source=CORPUS / "Daft Punk/Harder Better Faster Stronger.mp3",
         drums=STEMS_NEW / "Harder Better Faster Stronger/drums.wav",
         other=STEMS_NEW / "Harder Better Faster Stronger/other.wav",
         bass=STEMS_NEW / "Harder Better Faster Stronger/bass.wav",
-        genre="electronic-disco",
+        vocals=STEMS_NEW / "Harder Better Faster Stronger/vocals.wav",
+        genre="electronic", artist="Daft Punk",
     ),
     Track(
-        name="Harvester of Sorrow",
-        source=CORPUS / "Metallica/Harvester of Sorrow.mp3",
+        name="Harvester of Sorrow", source=CORPUS / "Metallica/Harvester of Sorrow.mp3",
         drums=STEMS_NEW / "Harvester of Sorrow/drums.wav",
         other=STEMS_NEW / "Harvester of Sorrow/other.wav",
         bass=STEMS_NEW / "Harvester of Sorrow/bass.wav",
-        genre="metal-doom",
+        vocals=STEMS_NEW / "Harvester of Sorrow/vocals.wav",
+        genre="metal", artist="Metallica",
     ),
     Track(
-        name="One",
-        source=CORPUS / "Metallica/One.mp3",
+        name="One", source=CORPUS / "Metallica/One.mp3",
         drums=STEMS_NEW / "One/drums.wav",
         other=STEMS_NEW / "One/other.wav",
         bass=STEMS_NEW / "One/bass.wav",
-        genre="metal-ballad",
+        vocals=STEMS_NEW / "One/vocals.wav",
+        genre="metal", artist="Metallica",
     ),
     Track(
-        name="Orion",
-        source=CORPUS / "Metallica/Orion.m4a",
+        name="Orion", source=CORPUS / "Metallica/Orion.m4a",
         drums=STEMS_NEW / "Orion/drums.wav",
         other=STEMS_NEW / "Orion/other.wav",
         bass=STEMS_NEW / "Orion/bass.wav",
-        genre="metal-instrumental",
+        vocals=STEMS_NEW / "Orion/vocals.wav",
+        genre="metal", artist="Metallica",
+        # Orion's identity is Cliff Burton's bass line, not the guitar.
+        # Iconic-stem override: use bass only when Orion provides the riff.
+        iconic_riff_stems=["bass"],
     ),
 ]
 
@@ -160,8 +181,21 @@ def score_pairings(tracks: list[Track]) -> list[dict]:
             bpm_cache[a.name], bpm_cache[b.name],
         )
 
-        cross_genre = 1.0 if a.genre != b.genre else 0.6
-        novelty_score = score.total * cross_genre
+        # Novelty multiplier: same-artist pairings get the steepest discount
+        # because listening feedback confirmed they fail the contextual-
+        # incongruity test ("no one would know it's a mashup"). Cross-artist
+        # cross-genre is the strongest novelty signal.
+        if a.artist == b.artist:
+            novelty_multiplier = 0.4
+            incongruity = "same-artist"
+        elif a.genre == b.genre:
+            novelty_multiplier = 0.7
+            incongruity = "same-genre"
+        else:
+            novelty_multiplier = 1.0
+            incongruity = "cross-genre"
+
+        novelty_score = score.total * novelty_multiplier
 
         results.append({
             "a": a, "b": b,
@@ -169,7 +203,7 @@ def score_pairings(tracks: list[Track]) -> list[dict]:
             "bpm_a": bpm_cache[a.name],
             "bpm_b": bpm_cache[b.name],
             "novelty_score": novelty_score,
-            "cross_genre": a.genre != b.genre,
+            "incongruity": incongruity,
         })
 
     results.sort(key=lambda r: -r["novelty_score"])
@@ -213,12 +247,13 @@ def render_one(r: dict, out_dir: Path) -> Path | None:
     else:
         drum, riff = b, a
 
-    output_name = f"Auto discovery - {drum.name} drums x {riff.name} riff.wav"
+    output_name = f"Auto discovery v2 - {drum.name} drums x {riff.name} riff.wav"
     print(f"\n{'=' * 72}")
     print(f"  {output_name}")
-    print(f"  mashability {r['score'].total:.3f}  (h={r['score'].harmonic:.2f} {r['score'].best_transpose_semitones:+d}st, "
-          f"r={r['score'].rhythmic:.2f}, s={r['score'].spectral:.2f})  "
-          f"cross-genre={r['cross_genre']}")
+    iconic = "/".join(riff.iconic_riff_stems)
+    print(f"  mashability {r['score'].total:.3f}  (h={r['score'].harmonic:.2f} "
+          f"{r['score'].best_transpose_semitones:+d}st, r={r['score'].rhythmic:.2f}, "
+          f"s={r['score'].spectral:.2f})  incongruity={r['incongruity']}  iconic_stems={iconic}")
     print(f"{'=' * 72}")
 
     try:
@@ -228,10 +263,8 @@ def render_one(r: dict, out_dir: Path) -> Path | None:
             output_dir=out_dir,
             output_name=output_name,
             drum_extract_from=drum.drums,
-            riff_extract_from=[riff.other, riff.bass],
+            riff_extract_from=riff.riff_stem_paths(),
             balance_layers=True,
-            # No timestamp overrides — pure auto-discovery, lean on v5's
-            # position-biased picker
         )
         print()
         print(result.explain())
@@ -262,11 +295,11 @@ def main() -> None:
     print(f"\n{'=' * 72}")
     print(f"  Mashability ranking (excluding already-exhausted Levee × Metallica trio)")
     print(f"{'=' * 72}")
-    print(f"  {'novelty':>8}  {'mash':>6}  {'BPMs':>13}  {'cross-genre':>11}  pair")
+    print(f"  {'novelty':>8}  {'mash':>6}  {'BPMs':>13}  {'incongruity':>13}  pair")
     for r in ranked[:15]:
         print(
             f"  {r['novelty_score']:>8.3f}  {r['score'].total:>6.3f}  "
-            f"{r['bpm_a']:>5.0f}/{r['bpm_b']:>5.0f}  {str(r['cross_genre']):>11}  "
+            f"{r['bpm_a']:>5.0f}/{r['bpm_b']:>5.0f}  {r['incongruity']:>13}  "
             f"{r['a'].name} × {r['b'].name}"
         )
 

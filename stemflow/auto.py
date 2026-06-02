@@ -87,24 +87,57 @@ class AutoMashupResult:
 def pick_drum_section(
     sections: list[SectionStats],
     min_duration: float = 5.0,
+    position_weight: float = 0.3,
 ) -> Optional[SectionStats]:
     """Pick the section most likely to be a drum break or drum-prominent
     intro.
 
-    Heuristic: among sections at least `min_duration` seconds long,
-    rank by lowest chroma strength (= least tonal content), breaking
-    ties by highest onset density (= most active percussion).
+    Composite score: low chroma (less tonal content), high onset
+    density (busy percussion), and an earliness bias (the iconic
+    drum moment of a song typically lives near the beginning or
+    in the first verse, not in the outro). Position weight defaults
+    to 0.3 — meaningful but not dominant.
+
+    Listening feedback that motivated the position bias: on Enter
+    Sandman, the v1 picker chose 261.9-310.8s (the outro) because
+    chroma was lowest there. But the iconic Lars groove lives in
+    the 15.9-56s verse area. Adding the position term lets the
+    earlier section win on the composite.
+
+    Args:
+        sections: Sections to choose from.
+        min_duration: Minimum acceptable section duration.
+        position_weight: Bias toward earlier sections in [0, 1]. 0 =
+            pure chroma + density (old behavior). 0.3 (default) =
+            moderate iconic-intro preference.
 
     Returns None if no section meets the duration threshold.
     """
     candidates = [s for s in sections if s.duration_s >= min_duration]
     if not candidates:
         return None
-    candidates.sort(key=lambda s: (s.chroma_strength, -s.density))
-    log.info("pick_drum_section: chose %.1f-%.1fs (chroma=%.3f, density=%.2f)",
-             candidates[0].start_s, candidates[0].end_s,
-             candidates[0].chroma_strength, candidates[0].density)
-    return candidates[0]
+
+    total = max(s.end_s for s in candidates)
+    max_density = max(s.density for s in candidates) or 1.0
+    min_chroma = min(s.chroma_strength for s in candidates)
+    max_chroma = max(s.chroma_strength for s in candidates)
+    chroma_range = max(max_chroma - min_chroma, 1e-6)
+
+    def score(s: SectionStats) -> float:
+        # All normalized to [0, 1] where higher is "more drum-like."
+        chroma_score = 1.0 - (s.chroma_strength - min_chroma) / chroma_range
+        density_score = s.density / max_density
+        position_score = 1.0 - (s.start_s / total)
+        drum_intrinsic = 0.6 * chroma_score + 0.4 * density_score
+        return (1 - position_weight) * drum_intrinsic + position_weight * position_score
+
+    candidates.sort(key=lambda s: -score(s))
+    pick = candidates[0]
+    log.info(
+        "pick_drum_section: chose %.1f-%.1fs (chroma=%.3f, density=%.2f, position_bias=%.2f)",
+        pick.start_s, pick.end_s, pick.chroma_strength, pick.density, position_weight,
+    )
+    return pick
 
 
 def pick_riff_section(
