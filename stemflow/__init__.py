@@ -5,6 +5,9 @@ to a unified BPM, and reassembles selected layers into a mixed and
 mastered track.
 
 Modules:
+    auto         — End-to-end auto-composition: pick sections from two
+                   tracks heuristically and render a mashup with no
+                   human timestamp input (v1 of auto-novelty)
     separate     — Stem separation (Demucs, audio-separator, BS-RoFormer)
     analyze      — BPM/beat/downbeat detection (beat-this!), key
                    estimation (Essentia), feature extraction for
@@ -34,6 +37,12 @@ from stemflow.analyze import (
     compute_features,
     detect_bpm,
     detect_key,
+)
+from stemflow.auto import (
+    AutoMashupResult,
+    compose_section_mashup,
+    pick_drum_section,
+    pick_riff_section,
 )
 from stemflow.config import load_structure
 from stemflow.corpus import (
@@ -105,4 +114,8 @@ __all__ = [
     "find_section_boundaries",
     "section_features",
     "find_riff_candidates",
+    "AutoMashupResult",
+    "compose_section_mashup",
+    "pick_drum_section",
+    "pick_riff_section",
 ]
