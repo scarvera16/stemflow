@@ -14,6 +14,9 @@ Modules:
     phrase       — Phrase alignment: bar-period detection, cross-
                    correlation phase finding, beat-aligned trim and
                    stretch primitive
+    sections     — Section detection (librosa agglomerative
+                   segmentation), per-section feature characterization,
+                   riff-candidate filtering
     mix          — Float32 numpy stereo mixer with equal-power crossfades
     master       — Two-stage mastering (Pedalboard DSP + pyloudnorm LUFS)
     mashability  — AutoMashUpper-style pairwise compatibility scoring
@@ -58,6 +61,12 @@ from stemflow.phrase import (
     find_phrase_downbeat,
 )
 from stemflow.process import clean_stem, stretch_to_bpm
+from stemflow.sections import (
+    SectionStats,
+    find_riff_candidates,
+    find_section_boundaries,
+    section_features,
+)
 from stemflow.separate import separate_stems
 
 __version__ = "0.1.0"
@@ -92,4 +101,8 @@ __all__ = [
     "bar_period_from_onsets",
     "find_phrase_downbeat",
     "beat_aligned_stretch",
+    "SectionStats",
+    "find_section_boundaries",
+    "section_features",
+    "find_riff_candidates",
 ]
