@@ -40,26 +40,44 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class AutoMashupResult:
-    """What the auto-composer produced and the choices it made."""
+    """What the auto-composer produced and the choices it made.
+
+    `drum_section` / `riff_section` are None when the caller passed an
+    explicit `drum_start_time` / `riff_start_time` and the section
+    picker was bypassed.
+    """
     output_path: Path
     drum_track: Path
     riff_track: Path
-    drum_section: SectionStats
-    riff_section: SectionStats
+    drum_section: Optional[SectionStats]
+    riff_section: Optional[SectionStats]
     drum_start_beat: int
     riff_start_beat: int
     target_bpm: float
 
+    def _layer_line(self, name: str, track: Path, section: Optional[SectionStats],
+                    start_beat: int, start_time_override: Optional[float]) -> str:
+        if section is not None:
+            return (
+                f"  {name:<8}: {track.name}  section {section.start_s:.1f}-{section.end_s:.1f}s "
+                f"(rms={section.rms_mean:.3f}, chroma={section.chroma_strength:.3f}, "
+                f"density={section.density:.2f}/s)  starting beat {start_beat}"
+            )
+        return (
+            f"  {name:<8}: {track.name}  manual override at ~{start_time_override:.2f}s  "
+            f"starting beat {start_beat}"
+        )
+
+    # Hooks the caller can populate for clearer explain() output.
+    drum_start_time_used: Optional[float] = None
+    riff_start_time_used: Optional[float] = None
+
     def explain(self) -> str:
         """Human-readable summary of the picks."""
         return (
-            f"Auto-mashup at {self.target_bpm} BPM\n"
-            f"  drums   : {self.drum_track.name}  section {self.drum_section.start_s:.1f}-{self.drum_section.end_s:.1f}s "
-            f"(rms={self.drum_section.rms_mean:.3f}, chroma={self.drum_section.chroma_strength:.3f}, "
-            f"density={self.drum_section.density:.2f}/s)  starting beat {self.drum_start_beat}\n"
-            f"  riff    : {self.riff_track.name}  section {self.riff_section.start_s:.1f}-{self.riff_section.end_s:.1f}s "
-            f"(rms={self.riff_section.rms_mean:.3f}, chroma={self.riff_section.chroma_strength:.3f}, "
-            f"density={self.riff_section.density:.2f}/s)  starting beat {self.riff_start_beat}\n"
+            f"Auto-mashup at {self.target_bpm:.1f} BPM\n"
+            f"{self._layer_line('drums', self.drum_track, self.drum_section, self.drum_start_beat, self.drum_start_time_used)}\n"
+            f"{self._layer_line('riff', self.riff_track, self.riff_section, self.riff_start_beat, self.riff_start_time_used)}\n"
             f"  output  : {self.output_path}"
         )
 
@@ -215,6 +233,8 @@ def compose_section_mashup(
     riff_gain_db: float = 0.0,
     fade_ms: int = 50,
     device: str = "mps",
+    drum_start_time: Optional[float] = None,
+    riff_start_time: Optional[float] = None,
 ) -> AutoMashupResult:
     """Compose an auto-mashup: drums from one track, riff from another.
 
@@ -272,6 +292,16 @@ def compose_section_mashup(
             to set that explicitly.
         fade_ms: Equal-power fade-in on the riff entry.
         device: beat-this inference device.
+        drum_start_time: If provided, bypass the drum-section picker
+            and use this source timestamp (snapped to the nearest
+            beat-this beat) as the drum start. Useful for skipping
+            past a transient at the section boundary (e.g., a cymbal
+            crash) or for forcing extraction from a specific moment.
+        riff_start_time: If provided, bypass the riff-section picker
+            and use this source timestamp as the riff start. The
+            iconic riff of a song is often known by the listener
+            (e.g., Enter Sandman main riff at 0:55, Sad But True at
+            0:21) and is more reliable than auto-discovery.
 
     Returns:
         AutoMashupResult with the picks recorded for transparency.
@@ -315,29 +345,46 @@ def compose_section_mashup(
     drum_required_s = total_bars * 4 * target_beat_period
     riff_required_s = riff_bars * 4 * target_beat_period
 
-    # 1-2: Section discovery + pick (filtered by required duration)
-    drum_sections = _all_sections(drum_track, n_segments)
-    drum_pick = pick_drum_section(drum_sections, min_duration=drum_required_s)
-    if drum_pick is None:
-        raise ValueError(
-            f"no drum-prominent section >= {drum_required_s:.0f}s in {drum_track.name} "
-            f"(longest section: {max((s.duration_s for s in drum_sections), default=0):.1f}s). "
-            "Try fewer drum_intro_bars + riff_bars, or n_segments=15+ for finer boundaries."
-        )
+    # 1-2: Section discovery + pick (filtered by required duration).
+    # Bypassed for either side if an explicit timestamp override is given.
+    if drum_start_time is None:
+        drum_sections = _all_sections(drum_track, n_segments)
+        drum_pick = pick_drum_section(drum_sections, min_duration=drum_required_s)
+        if drum_pick is None:
+            raise ValueError(
+                f"no drum-prominent section >= {drum_required_s:.0f}s in {drum_track.name} "
+                f"(longest section: {max((s.duration_s for s in drum_sections), default=0):.1f}s). "
+                "Try fewer drum_intro_bars + riff_bars, or n_segments=15+ for finer boundaries, "
+                f"or pass drum_start_time=<seconds> to bypass section detection."
+            )
+    else:
+        drum_pick = None
+        log.info("drum_start_time override: %.3fs (section picker bypassed)", drum_start_time)
 
-    riff_sections = _all_sections(riff_track, n_segments)
-    riff_pick = pick_riff_section(riff_sections, min_duration=riff_required_s)
-    if riff_pick is None:
-        raise ValueError(
-            f"no riff-prominent section >= {riff_required_s:.0f}s in {riff_track.name}. "
-            "Try fewer riff_bars or n_segments=15+ for finer boundaries."
-        )
+    if riff_start_time is None:
+        riff_sections = _all_sections(riff_track, n_segments)
+        riff_pick = pick_riff_section(riff_sections, min_duration=riff_required_s)
+        if riff_pick is None:
+            raise ValueError(
+                f"no riff-prominent section >= {riff_required_s:.0f}s in {riff_track.name}. "
+                "Try fewer riff_bars or n_segments=15+ for finer boundaries, "
+                f"or pass riff_start_time=<seconds> to bypass section detection."
+            )
+    else:
+        riff_pick = None
+        log.info("riff_start_time override: %.3fs (section picker bypassed)", riff_start_time)
 
     # 3: Beats already computed above (needed for auto_target_bpm).
 
-    # 4: First beat at or after each section start
-    drum_start_idx = int(np.searchsorted(drum_beats, drum_pick.start_s))
-    riff_start_idx = int(np.searchsorted(riff_beats, riff_pick.start_s))
+    # 4: First beat at or after the chosen start (section pick or override)
+    drum_start_time_used = (
+        float(drum_start_time) if drum_start_time is not None else float(drum_pick.start_s)
+    )
+    riff_start_time_used = (
+        float(riff_start_time) if riff_start_time is not None else float(riff_pick.start_s)
+    )
+    drum_start_idx = int(np.searchsorted(drum_beats, drum_start_time_used))
+    riff_start_idx = int(np.searchsorted(riff_beats, riff_start_time_used))
 
     drum_n_beats = total_bars * 4
     riff_n_beats = riff_bars * 4
@@ -435,4 +482,6 @@ def compose_section_mashup(
         drum_start_beat=drum_start_idx,
         riff_start_beat=riff_start_idx,
         target_bpm=target_bpm,
+        drum_start_time_used=drum_start_time_used if drum_pick is None else None,
+        riff_start_time_used=riff_start_time_used if riff_pick is None else None,
     )
