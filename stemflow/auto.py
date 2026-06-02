@@ -138,38 +138,70 @@ def compose_section_mashup(
     output_dir: Path,
     output_name: str = "auto_mashup.wav",
     *,
+    drum_extract_from: Optional[Path] = None,
+    riff_extract_from: Optional[list[Path]] = None,
+    balance_layers: bool = True,
+    layer_target_lufs: float = -18.0,
     target_bpm: float = 80.0,
     drum_intro_bars: int = 2,
     riff_bars: int = 8,
     n_segments: int = 10,
-    riff_gain_db: float = -3.0,
+    drum_gain_db: float = 0.0,
+    riff_gain_db: float = 0.0,
     fade_ms: int = 50,
     device: str = "mps",
 ) -> AutoMashupResult:
     """Compose an auto-mashup: drums from one track, riff from another.
 
     Pipeline:
-      1. Find sections in each track via librosa segmentation.
+      1. Find sections in each track via librosa segmentation (on the
+         full mix, where section boundaries are most pronounced).
       2. Pick the most drum-prominent section from drum_track and the
          most riff-prominent section from riff_track.
       3. Run beat-this on both tracks.
       4. Extract the first `drum_intro_bars + riff_bars` of beats from
          drum_track's chosen section, and `riff_bars` of beats from
          riff_track's chosen section.
-      5. Beat-aligned stretch each clip to the target BPM.
-      6. Layer: drums alone for the intro bars, then drums + riff for
+      5. Beat-aligned stretch each clip to the target BPM. If
+         `drum_extract_from` / `riff_extract_from` are provided,
+         audio is extracted from those stem paths instead of the
+         full tracks (vocals get cleanly excluded).
+      6. Optionally LUFS-balance the two layers to `layer_target_lufs`
+         so they reach the master at perceptually equal loudness.
+      7. Layer: drums alone for the intro bars, then drums + riff for
          the rest. Master to -14 LUFS.
 
     Args:
-        drum_track: Path to the track providing drums.
-        riff_track: Path to the track providing the riff.
+        drum_track: Path to the track providing drums (used for
+            section analysis + beat detection).
+        riff_track: Path to the track providing the riff (used for
+            section analysis + beat detection).
         output_dir: Where to write the rendered file.
         output_name: Output filename for the mastered output.
+        drum_extract_from: If provided, extract drum audio from this
+            stem path instead of `drum_track`. Use the Demucs drum
+            stem to keep vocals/other instruments out of the drum
+            layer. Section boundaries and beats are still computed
+            from the full track.
+        riff_extract_from: If provided, extract riff audio from these
+            stem paths (summed) instead of `riff_track`. Pass `[other,
+            bass]` to get a full instrumental riff without vocals.
+        balance_layers: LUFS-balance each layer to `layer_target_lufs`
+            before mixing. Strongly recommended; without it, the layer
+            with hotter mastering dominates the mix. Default True.
+        layer_target_lufs: Target loudness for each layer when
+            `balance_layers=True`. Default -18 LUFS (gives headroom
+            for the final mix and master).
         target_bpm: Common tempo for the mashup. Default 80.
         drum_intro_bars: Bars of drums alone before the riff drops in.
         riff_bars: Bars of riff layered with drums.
         n_segments: Sections to consider per track.
-        riff_gain_db: Riff layer attenuation relative to drums.
+        drum_gain_db: Per-layer gain on drums *after* LUFS balancing.
+            Default 0.
+        riff_gain_db: Per-layer gain on riff *after* LUFS balancing.
+            Default 0. When `balance_layers=False`, the historical
+            behavior was -3 dB to make drums prominent; you may want
+            to set that explicitly.
         fade_ms: Equal-power fade-in on the riff entry.
         device: beat-this inference device.
 
@@ -177,7 +209,9 @@ def compose_section_mashup(
         AutoMashupResult with the picks recorded for transparency.
 
     Raises:
-        ValueError: If no suitable section is found in either track.
+        ValueError: If no suitable section is found in either track,
+            or if `drum_extract_from` / `riff_extract_from` paths are
+            unreadable.
     """
     from beat_this.inference import File2Beats
 
@@ -239,22 +273,62 @@ def compose_section_mashup(
             f"(have {len(riff_beats) - riff_start_idx})"
         )
 
-    # 5: Beat-aligned stretch
+    # 5: Beat-aligned stretch.
+    # Extract from a stem path if provided, else from the full track.
+    # Beats and section boundaries were computed from the full track
+    # (more reliable), but the actual audio comes from the stem.
+    drum_source = Path(drum_extract_from) if drum_extract_from is not None else drum_track
     drum_clip, sr = beat_aligned_stretch(
-        drum_track, drum_beats, drum_start_idx, drum_n_beats, target_beat_period,
-    )
-    riff_clip, _ = beat_aligned_stretch(
-        riff_track, riff_beats, riff_start_idx, riff_n_beats, target_beat_period,
+        drum_source, drum_beats, drum_start_idx, drum_n_beats, target_beat_period,
     )
 
-    # 6: Layer + master
+    if riff_extract_from is not None:
+        riff_paths = [Path(p) for p in riff_extract_from]
+        if not riff_paths:
+            raise ValueError("riff_extract_from must be a non-empty list of stem paths")
+        riff_layers = []
+        for p in riff_paths:
+            clip, _ = beat_aligned_stretch(
+                p, riff_beats, riff_start_idx, riff_n_beats, target_beat_period,
+            )
+            riff_layers.append(clip)
+        # Sum the stems element-wise (same shape since same beat range + sr)
+        riff_clip = np.sum(riff_layers, axis=0).astype(np.float32)
+    else:
+        riff_clip, _ = beat_aligned_stretch(
+            riff_track, riff_beats, riff_start_idx, riff_n_beats, target_beat_period,
+        )
+
+    # 6: LUFS balance so both layers reach the master at perceptually equal
+    # loudness. Without this step, the layer with hotter source mastering
+    # dominates the mix regardless of structural intent.
+    if balance_layers:
+        import pyloudnorm
+        meter = pyloudnorm.Meter(sr)
+        # pyloudnorm wants mono; use the mean of stereo channels
+        drum_lufs = float(meter.integrated_loudness(drum_clip.mean(axis=1)))
+        riff_lufs = float(meter.integrated_loudness(riff_clip.mean(axis=1)))
+        drum_balance_gain = 10 ** ((layer_target_lufs - drum_lufs) / 20.0)
+        riff_balance_gain = 10 ** ((layer_target_lufs - riff_lufs) / 20.0)
+        log.info(
+            "LUFS balance: drums %.1f -> %.1f LUFS (%+0.2f dB), riff %.1f -> %.1f LUFS (%+0.2f dB)",
+            drum_lufs, layer_target_lufs, layer_target_lufs - drum_lufs,
+            riff_lufs, layer_target_lufs, layer_target_lufs - riff_lufs,
+        )
+        drum_clip = (drum_clip * drum_balance_gain).astype(np.float32)
+        riff_clip = (riff_clip * riff_balance_gain).astype(np.float32)
+
+    # 7: Apply per-layer gain (artistic tilt on top of the LUFS balance),
+    # then layer + master.
+    drum_clip = drum_clip * (10 ** (drum_gain_db / 20.0))
+    riff_clip = riff_clip * (10 ** (riff_gain_db / 20.0))
+
     total_samples = int(total_bars * 4 * target_beat_period * sr)
     mix = np.zeros((total_samples, 2), dtype=np.float32)
     mix[:len(drum_clip)] += drum_clip
 
     riff_start_sample = int(drum_intro_bars * 4 * target_beat_period * sr)
-    riff_gain = 10 ** (riff_gain_db / 20.0)
-    riff_layer = riff_clip * riff_gain
+    riff_layer = riff_clip.copy()
 
     fade_samples = min(int(fade_ms / 1000.0 * sr), len(riff_layer))
     fade_in = np.sin(np.linspace(0, np.pi / 2, fade_samples)).astype(np.float32)
