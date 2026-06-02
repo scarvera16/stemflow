@@ -144,9 +144,15 @@ TRACKS = [
         bass=STEMS_NEW / "Orion/bass.wav",
         vocals=STEMS_NEW / "Orion/vocals.wav",
         genre="metal", artist="Metallica",
-        # Orion's identity is Cliff Burton's bass line, not the guitar.
-        # Iconic-stem override: use bass only when Orion provides the riff.
-        iconic_riff_stems=["bass"],
+        # Reverted from bass-only. Carver's earlier theoretical intuition
+        # was that Cliff Burton's bass is the iconic element, but in
+        # practice the bass alone has no harmonic context — you hear
+        # low-end melody with no chord structure underneath, which
+        # listens as 'muddled.' The guitars in 'other' provide the
+        # frame the bass moves against. Default [other, bass] is right
+        # for Orion. The override mechanism stays in place for other
+        # tracks where it IS right (Primus, MMJ vocals, etc.).
+        # iconic_riff_stems=["bass"]  # tried; produced muddy output
     ),
 ]
 
