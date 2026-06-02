@@ -1,28 +1,18 @@
-"""Auto-novelty v2: stem-based extraction + LUFS-balanced layers.
+"""Auto-novelty v2 / v3: stems, LUFS balance, riff position, auto tempo.
 
-Addresses two real problems v1 surfaced when the rendered outputs
-were listened to:
+Three iteration generations of fixes from listening to the outputs:
 
-  1. v1 picked a "drum-prominent" section based on full-track chroma,
-     which for Led Zeppelin's When the Levee Breaks meant the 80.9-
-     130.3s window — drums + harmonica + Robert Plant vocals. The
-     "drum layer" of every v1 mashup contained vocals.
+  v1 -> v2: stem-based extraction (cleanly excludes vocals) and
+  LUFS-balanced layers (so the hotter source doesn't dominate).
 
-  2. v1 peak-normalized only the final sum, which let the layer with
-     hotter source mastering (Levee Breaks in this case) dominate
-     the mix. The Metallica riffs got buried.
+  v2 -> v3: bias the riff picker toward EARLIER sections (the iconic
+  riff lives near the beginning of the song, not in late repetitions
+  where pure RMS would land), and auto-compute target_bpm as the
+  midpoint of the two source BPMs (so Enter Sandman's 125 BPM doesn't
+  get stretched to 80, killing its recognizability).
 
-v2 fixes both:
-
-  - Section boundaries + beat detection still run on the full track
-    (most reliable signal). But audio extraction comes from
-    Demucs-separated stems: the drum stem for the drum layer, and
-    the (other + bass) stems summed for the riff layer. Vocals are
-    cleanly excluded from both.
-
-  - Each layer is LUFS-balanced to -18 LUFS before summing, so they
-    reach the master at perceptually equal loudness. The hotter
-    source no longer wins by default.
+The script outputs files prefixed "Auto v3" so they sit alongside the
+v1 and v2 versions for A/B comparison.
 
 Run from any cwd:
     python -m examples.auto_novelty_v2
@@ -80,7 +70,7 @@ def main() -> None:
 
     pairings = [
         {
-            "name": "Auto v2 - Levee drums x Sad But True riff.wav",
+            "name": "Auto v3 - Levee drums x Sad But True riff.wav",
             "drum_track": LEVEE,
             "riff_track": SBT,
             "drum_extract_from": levee_drum_stem,
@@ -90,7 +80,7 @@ def main() -> None:
             ],
         },
         {
-            "name": "Auto v2 - Levee drums x Master of Puppets riff.wav",
+            "name": "Auto v3 - Levee drums x Master of Puppets riff.wav",
             "drum_track": LEVEE,
             "riff_track": MOP,
             "drum_extract_from": levee_drum_stem,
@@ -100,7 +90,7 @@ def main() -> None:
             ],
         },
         {
-            "name": "Auto v2 - Levee drums x Enter Sandman riff.wav",
+            "name": "Auto v3 - Levee drums x Enter Sandman riff.wav",
             "drum_track": LEVEE,
             "riff_track": ENTER_S,
             "drum_extract_from": levee_drum_stem,
@@ -139,7 +129,8 @@ def main() -> None:
                 riff_extract_from=cfg["riff_extract_from"],
                 balance_layers=True,
                 layer_target_lufs=-18.0,
-                target_bpm=80.0,
+                # target_bpm omitted -> auto-computed midpoint
+                # position_weight inside the picker defaults to 0.4
             )
             print()
             print(result.explain())

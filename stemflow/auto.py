@@ -93,15 +93,28 @@ def pick_riff_section(
     sections: list[SectionStats],
     min_duration: float = 20.0,
     min_chroma: float = 0.2,
+    position_weight: float = 0.4,
 ) -> Optional[SectionStats]:
     """Pick the section most likely to be a primary riff section.
 
     Heuristic: among sections at least `min_duration` seconds long
     and with at least `min_chroma` chroma strength (i.e., enough
-    tonal content to be a riff and not just drums), rank by highest
-    RMS energy.
+    tonal content to be a riff and not just drums), rank by a
+    composite score that combines RMS energy with section position.
+    Earlier sections get a position bonus because the iconic riff
+    of a song is typically established near the song's beginning
+    (after a short intro), not in late repetitions.
 
-    Returns None if no section meets the criteria.
+    Args:
+        sections: List of section stats to choose from.
+        min_duration: Minimum acceptable section duration.
+        min_chroma: Minimum tonal content (rules out drum-only).
+        position_weight: How much to bias toward earlier sections,
+            in [0, 1]. 0 = pure RMS (v1/v2 behavior). 1 = pure
+            earliest-meeting-criteria. 0.4 (default) gives the
+            iconic-riff bias while still preferring loud sections.
+
+    Returns None if no section meets the duration and chroma criteria.
     """
     candidates = [
         s for s in sections
@@ -109,11 +122,63 @@ def pick_riff_section(
     ]
     if not candidates:
         return None
-    candidates.sort(key=lambda s: -s.rms_mean)
-    log.info("pick_riff_section: chose %.1f-%.1fs (rms=%.3f, chroma=%.3f)",
-             candidates[0].start_s, candidates[0].end_s,
-             candidates[0].rms_mean, candidates[0].chroma_strength)
-    return candidates[0]
+
+    # Normalize position by song duration (using the latest end as a proxy)
+    total = max(s.end_s for s in candidates)
+    max_rms = max(s.rms_mean for s in candidates) or 1.0
+
+    def score(s: SectionStats) -> float:
+        rms_score = s.rms_mean / max_rms
+        position_score = 1.0 - (s.start_s / total)  # 1 at earliest, 0 at latest
+        return (1 - position_weight) * rms_score + position_weight * position_score
+
+    candidates.sort(key=lambda s: -score(s))
+    pick = candidates[0]
+    log.info(
+        "pick_riff_section: chose %.1f-%.1fs (rms=%.3f, chroma=%.3f, position_bias=%.2f)",
+        pick.start_s, pick.end_s, pick.rms_mean, pick.chroma_strength, position_weight,
+    )
+    return pick
+
+
+# ── Auto tempo selection ─────────────────────────────────────────────────────
+
+def auto_target_bpm(
+    drum_bpm: float,
+    riff_bpm: float,
+    max_ratio: float = 2.0,
+) -> float:
+    """Choose a mashup target tempo from two source BPMs.
+
+    Returns the arithmetic midpoint after light octave-matching. If
+    one source is more than `max_ratio` times the other (e.g., Levee
+    Breaks at 71 BPM versus Master of Puppets at 214), the higher
+    is halved until the ratio is within range. This compromise
+    stretches both sources by roughly equal amounts and avoids
+    extreme single-source distortion that destroys recognizability.
+
+    Use the default unless you have a reason to override. For pairs
+    with very different native tempos, the midpoint still requires
+    significant stretching of both sources; some pairs simply don't
+    tempo-match cleanly and may sound better at a target near one
+    source's native BPM (set `target_bpm` explicitly in that case).
+
+    Args:
+        drum_bpm: BPM of the drum source.
+        riff_bpm: BPM of the riff source.
+        max_ratio: Maximum allowable BPM ratio before octave-matching.
+            Default 2.0 (one octave).
+
+    Returns:
+        Target BPM for the mashup.
+    """
+    a, b = float(drum_bpm), float(riff_bpm)
+    # Octave-match the larger toward the smaller
+    while b / a > max_ratio:
+        b /= 2
+    while a / b > max_ratio:
+        a /= 2
+    return (a + b) / 2
 
 
 # ── Section discovery helper ─────────────────────────────────────────────────
@@ -142,7 +207,7 @@ def compose_section_mashup(
     riff_extract_from: Optional[list[Path]] = None,
     balance_layers: bool = True,
     layer_target_lufs: float = -18.0,
-    target_bpm: float = 80.0,
+    target_bpm: Optional[float] = None,
     drum_intro_bars: int = 2,
     riff_bars: int = 8,
     n_segments: int = 10,
@@ -192,7 +257,10 @@ def compose_section_mashup(
         layer_target_lufs: Target loudness for each layer when
             `balance_layers=True`. Default -18 LUFS (gives headroom
             for the final mix and master).
-        target_bpm: Common tempo for the mashup. Default 80.
+        target_bpm: Common tempo for the mashup. If None (default),
+            computed automatically via `auto_target_bpm()` from the
+            two source BPMs (lightly octave-matched midpoint). Pass
+            an explicit value to override.
         drum_intro_bars: Bars of drums alone before the riff drops in.
         riff_bars: Bars of riff layered with drums.
         n_segments: Sections to consider per track.
@@ -222,6 +290,23 @@ def compose_section_mashup(
 
     log.info("compose_section_mashup: drum=%s, riff=%s", drum_track.name, riff_track.name)
 
+    # Compute target_bpm from sources if not explicitly provided. We need the
+    # source BPMs first, so run beat-this up front (we'd run it later anyway).
+    from beat_this.inference import File2Beats
+    f2b = File2Beats(device=device, dbn=False)
+    drum_beats, _ = f2b(str(drum_track))
+    riff_beats, _ = f2b(str(riff_track))
+    drum_beats = np.asarray(drum_beats)
+    riff_beats = np.asarray(riff_beats)
+
+    drum_bpm = 60.0 / float(np.median(np.diff(drum_beats))) if len(drum_beats) > 1 else 120.0
+    riff_bpm = 60.0 / float(np.median(np.diff(riff_beats))) if len(riff_beats) > 1 else 120.0
+
+    if target_bpm is None:
+        target_bpm = auto_target_bpm(drum_bpm, riff_bpm)
+        log.info("auto target_bpm: drum %.1f + riff %.1f -> %.1f BPM",
+                 drum_bpm, riff_bpm, target_bpm)
+
     # Required section durations (the auto-composer must pick sections long
     # enough to actually supply the requested bars; otherwise it would silently
     # extract beats past the chosen section's end).
@@ -248,12 +333,7 @@ def compose_section_mashup(
             "Try fewer riff_bars or n_segments=15+ for finer boundaries."
         )
 
-    # 3: Beat detection
-    f2b = File2Beats(device=device, dbn=False)
-    drum_beats, _ = f2b(str(drum_track))
-    riff_beats, _ = f2b(str(riff_track))
-    drum_beats = np.asarray(drum_beats)
-    riff_beats = np.asarray(riff_beats)
+    # 3: Beats already computed above (needed for auto_target_bpm).
 
     # 4: First beat at or after each section start
     drum_start_idx = int(np.searchsorted(drum_beats, drum_pick.start_s))
